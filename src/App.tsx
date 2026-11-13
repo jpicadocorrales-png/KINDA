@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   Activity,
   Apple,
   ArrowRight,
   ArrowUpRight,
   Bike,
+  Bell,
   BookOpen,
   Brain,
   Briefcase,
@@ -19,6 +20,7 @@ import {
   Copy,
   Droplets,
   Dumbbell,
+  Feather,
   Flower2,
   Footprints,
   GraduationCap,
@@ -28,8 +30,11 @@ import {
   Languages,
   Laptop,
   Leaf,
+  Lightbulb,
+  Link2,
   ListChecks,
   Menu,
+  Minus,
   Moon,
   MoreHorizontal,
   Music,
@@ -58,7 +63,12 @@ import {
 type Section = 'Overview' | 'Routines' | 'Habits' | 'Calendar' | 'Insights' | 'Profile' | 'Settings'
 type Status = 'complete' | 'partial' | 'skipped' | 'rescheduled'
 type Habit = { id: string; name: string; category: string; duration: number; time: string; routine: string }
-type Routine = { id: string; name: string; time: string; duration: number; days: string[]; habitIds: string[]; paused?: boolean }
+type Reminder = { enabled: boolean; offset: number; nudge: boolean }
+type Routine = {
+  id: string; name: string; time: string; duration: number; days: string[]; habitIds: string[]; paused?: boolean
+  anchor?: string; frequency?: 'days' | 'flexible'; timesPerWeek?: number; windowEnd?: string
+  reminder?: Reminder; minimumHabitIds?: string[]; notes?: string
+}
 type ActivityRecord = { status: Status; amount?: string; rescheduledTo?: string }
 type Profile = { name: string }
 type Workspace = { habits: Habit[]; routines: Routine[]; records: Record<string, ActivityRecord>; profile?: Profile }
@@ -172,6 +182,7 @@ function App() {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('All habits')
   const [modal, setModal] = useState<'routine' | 'habit' | null>(null)
+  const [routineEditor, setRoutineEditor] = useState<{ routine?: Routine } | null>(null)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [notice, setNotice] = useState('')
 
@@ -243,6 +254,24 @@ function App() {
     setModal(null)
   }
 
+  function saveRoutine(routine: Routine, newHabits: Habit[], previousName?: string) {
+    setWorkspace((current) => {
+      const exists = current.routines.some((item) => item.id === routine.id)
+      const habits = current.habits.map((habit) => {
+        if (routine.habitIds.includes(habit.id)) return { ...habit, routine: routine.name }
+        if (habit.routine === (previousName ?? routine.name)) return { ...habit, routine: 'Just for me' }
+        return habit
+      })
+      return {
+        ...current,
+        habits: [...habits, ...newHabits.map((habit) => ({ ...habit, routine: routine.name }))],
+        routines: exists ? current.routines.map((item) => item.id === routine.id ? routine : item) : [...current.routines, routine],
+      }
+    })
+    setRoutineEditor(null)
+    setNotice(previousName ? 'Routine updated' : 'Your new rhythm is ready')
+  }
+
   function saveProfile(name: string) {
     setWorkspace((current) => ({ ...current, profile: { name } }))
     setNotice('Profile updated')
@@ -259,6 +288,8 @@ function App() {
     setWorkspace((current) => ({ ...freshWorkspace(), profile: current.profile }))
     setNotice('Sample plan restored')
   }
+
+  const closeRoutineEditor = useCallback(() => setRoutineEditor(null), [])
 
   function navigateTo(next: Section) {
     setSection(next)
@@ -285,7 +316,7 @@ function App() {
         <header className="topbar"><button className="icon-button menu-button" aria-label="Open navigation" onClick={() => setMobileMenuOpen(true)}><Menu size={20} /></button><div className="breadcrumb"><span>My space</span><ChevronRight size={14} /><strong>{section}</strong></div><div className="topbar-right"><span className="date-pill"><span className="date-dot" />{new Intl.DateTimeFormat('en', { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date())}</span><button className="avatar top-avatar" aria-label="Open profile" onClick={() => navigateTo('Profile')}>{initial}</button></div></header>
         <div className="content-wrap">
           {section === 'Overview' && <Overview name={firstName} habits={todayActivities} routines={workspace.routines} records={workspace.records} progress={progress} onNavigate={navigateTo} onRecord={recordActivity} onAdd={() => setModal('habit')} />}
-          {section === 'Routines' && <Routines routines={workspace.routines} habits={workspace.habits} onAdd={() => setModal('routine')} onUpdate={updateRoutine} />}
+          {section === 'Routines' && <Routines routines={workspace.routines} habits={workspace.habits} onAdd={() => setRoutineEditor({})} onEdit={(routine) => setRoutineEditor({ routine })} onUpdate={updateRoutine} />}
           {section === 'Habits' && <Habits habits={workspace.habits} query={search} category={category} onSearch={setSearch} onCategory={setCategory} onAdd={() => setModal('habit')} />}
           {section === 'Calendar' && <CalendarView habits={workspace.habits} routines={workspace.routines} records={workspace.records} selectedDate={selectedDate} onDate={setSelectedDate} onRecord={recordActivity} />}
           {section === 'Insights' && <Insights records={workspace.records} onNavigate={navigateTo} />}
@@ -296,6 +327,7 @@ function App() {
       </main>
       {notice && <div className="toast" role="status"><span className="toast-icon"><Check size={14} /></span>{notice}</div>}
       {modal && <ItemModal kind={modal} onClose={() => setModal(null)} onSave={saveItem} />}
+      {routineEditor && <RoutineEditor routine={routineEditor.routine} habits={workspace.habits} onClose={closeRoutineEditor} onSave={saveRoutine} />}
     </div>
   )
 }
@@ -317,7 +349,7 @@ function Overview({ name, habits, routines, records, progress, onNavigate, onRec
         <p className="banner-greeting">{greeting}, {name}</p>
         <h1 className="banner-title">Make room<br />for <em>what matters.</em></h1>
         <p className="welcome-subtitle">A little progress is still progress. Take today one small step at a time.</p>
-        <div className="welcome-actions"><button className="button button-primary quick-action" onClick={onAdd}><Plus size={17} /> Add a habit</button><span className="welcome-chip"><Check size={15} />{finished} of {habits.length} small steps today</span></div>
+        <div className="welcome-actions"><button className="button button-primary quick-action" onClick={onAdd}><Plus size={17} /> Add a habit</button><span className="welcome-chip"><Check size={14} strokeWidth={2.5} />{finished} of {habits.length} small steps today</span></div>
       </div>
     </section>
     <section className="dashboard-grid"><div className="left-column">
@@ -326,7 +358,7 @@ function Overview({ name, habits, routines, records, progress, onNavigate, onRec
         const routineHabits = habits.filter((habit) => routine.habitIds.includes(habit.id))
         const done = routineHabits.filter((habit) => records[dateKey(now, habit.id)]?.status === 'complete').length
         const complete = routineHabits.length > 0 && done === routineHabits.length
-        return <div className={`routine-row ${complete ? 'routine-complete' : ''}`} data-tone={routineTones[index % routineTones.length]} key={routine.id}><div className="routine-icon"><RoutineIcon routine={routine} /></div><div className="routine-info"><div className="routine-title-row"><strong>{routine.name}</strong><span className="routine-time"><Clock3 size={13} />{routine.time}</span></div><span className="routine-detail">{routineHabits.length} moments <span className="middle-dot">·</span> about {routine.duration} min</span><div className="mini-progress"><span style={{ width: `${routineHabits.length ? done / routineHabits.length * 100 : 0}%` }} /></div></div><span className="routine-count">{complete ? <><Check size={12} /> Done</> : `${done}/${routineHabits.length}`}</span><button className="small-icon-button" aria-label={`Open ${routine.name}`} onClick={() => onNavigate('Routines')}><ChevronRight size={17} /></button></div>
+        return <div className={`routine-row ${complete ? 'routine-complete' : ''}`} data-tone={routineTones[index % routineTones.length]} key={routine.id}><div className="routine-icon"><RoutineIcon routine={routine} /></div><div className="routine-info"><div className="routine-title-row"><strong>{routine.name}</strong><span className="routine-time"><Clock3 size={13} />{routine.time}</span></div><span className="routine-detail">{routineHabits.length} moments <span className="middle-dot">·</span> about {formatDuration(routine.duration)}</span><div className="mini-progress"><span style={{ width: `${routineHabits.length ? done / routineHabits.length * 100 : 0}%` }} /></div></div><span className="routine-count">{complete ? <><Check size={12} /> Done</> : `${done}/${routineHabits.length}`}</span><button className="small-icon-button" aria-label={`Open ${routine.name}`} onClick={() => onNavigate('Routines')}><ChevronRight size={17} /></button></div>
       })}{todayRoutines.length === 0 && <div className="empty-inline">No routines planned for today. A little breathing room counts, too.</div>}</div></section>
       <section className="panel week-panel"><div className="panel-heading"><div><h2>Your week</h2></div><button className="text-button" onClick={() => onNavigate('Insights')}>Weekly insights <ArrowRight size={15} /></button></div><div className="week-chart" aria-label="Weekly routine overview">{[['M', 58, 2], ['T', 76, 3], ['W', 48, 2], ['T', 88, 4], ['F', 65, 3], ['S', 40, 2], ['S', 32, 1]].map(([day, height, count], index) => <button key={`${day}-${index}`} className={`week-column ${index === (now.getDay() + 6) % 7 ? 'today-column' : ''}`} onClick={() => onNavigate('Calendar')} aria-label={`${day}, ${count} planned moments`}><span className="week-bar-wrap"><span className="week-bar" style={{ height: `${height}%` }} /></span><span className="week-count">{count}</span><span className="week-day">{day}</span></button>)}</div></section>
     </div><div className="right-column">
@@ -340,11 +372,275 @@ function Overview({ name, habits, routines, records, progress, onNavigate, onRec
   </>
 }
 
-function Routines({ routines, habits, onAdd, onUpdate }: { routines: Routine[]; habits: Habit[]; onAdd: () => void; onUpdate: (id: string, action: 'pause' | 'duplicate') => void }) {
-  return <><PageIntro tone="sage" eyebrow="ROUTINES" title={<>Find your own <em>rhythm.</em></>} subtitle="A rhythm, not a rulebook. Build around the days you actually have." action={<button className="button button-primary" onClick={onAdd}><Plus size={17} /> New routine</button>} /><div className="routine-page-grid">{routines.map((routine, index) => {
-    const routineHabits = habits.filter((habit) => routine.habitIds.includes(habit.id))
-    return <article className={`routine-card ${routine.paused ? 'routine-paused' : ''}`} data-tone={routineTones[index % routineTones.length]} key={routine.id}><div className="routine-card-top"><div className="routine-icon"><RoutineIcon routine={routine} /></div><button className="small-icon-button" aria-label={`More options for ${routine.name}`} onClick={() => onUpdate(routine.id, 'pause')}><MoreHorizontal size={19} /></button></div><div className="routine-card-title"><h2>{routine.name}</h2>{routine.paused && <span className="paused-label">Paused</span>}</div><div className="routine-card-meta"><span><Clock3 size={14} />{routine.time}</span><span><Activity size={14} />{routine.duration} min</span></div><div className="day-chips">{dayInitials.map((day, i) => <span className={routine.days.includes(dayLabels[i]) ? 'day-chip selected' : 'day-chip'} key={`${day}-${i}`}>{day}</span>)}</div><div className="routine-card-divider" /><div className="routine-habits-label">IN THIS ROUTINE <span>{routineHabits.length}</span></div><div className="routine-habit-stack">{routineHabits.slice(0, 3).map((habit) => <div key={habit.id}><span className="tiny-check" data-tone={toneFor(habit.category)}><HabitIcon habit={habit} size={13} /></span>{habit.name}<span className="habit-duration">{habit.duration}m</span></div>)}{routineHabits.length === 0 && <div className="empty-inline compact-empty">Ready when you are. Add a habit from your collection.</div>}</div><div className="routine-card-actions"><button className="button button-quiet" onClick={() => onUpdate(routine.id, 'pause')}>{routine.paused ? 'Resume' : 'Pause'}</button><button className="button button-quiet" onClick={() => onUpdate(routine.id, 'duplicate')}><Copy size={14} /> Duplicate</button><button className="button button-quiet edit-button" onClick={() => onUpdate(routine.id, 'pause')}>Edit <ArrowRight size={14} /></button></div></article>
-  })}<button className="new-routine-card" onClick={onAdd}><span className="new-routine-plus"><Plus size={20} /></span><strong>Start a new rhythm</strong><span>Make a routine that feels like yours.</span></button></div><div className="note-banner"><span className="note-banner-icon"><Sparkles size={17} /></span><span><strong>It can be smaller.</strong> Every routine can have a minimum version for the days that ask for less.</span><button onClick={onAdd}>Create one <ArrowRight size={14} /></button></div></>
+function Routines({ routines, habits, onAdd, onEdit, onUpdate }: { routines: Routine[]; habits: Habit[]; onAdd: () => void; onEdit: (routine: Routine) => void; onUpdate: (id: string, action: 'pause' | 'duplicate') => void }) {
+  return <>
+    <PageIntro tone="sage" eyebrow="ROUTINES" title={<>Find your own <em>rhythm.</em></>} subtitle="A rhythm, not a rulebook. Build around the days you actually have." action={<button className="button button-primary" onClick={onAdd}><Plus size={17} /> New routine</button>} />
+    <div className="routine-page-grid">
+      {routines.map((routine, index) => {
+        const routineHabits = routine.habitIds.map((id) => habits.find((habit) => habit.id === id)).filter((habit): habit is Habit => Boolean(habit))
+        const minimum = routineHabits.filter((habit) => routine.minimumHabitIds?.includes(habit.id))
+        return <article className={`routine-card ${routine.paused ? 'routine-paused' : ''}`} data-tone={routineTones[index % routineTones.length]} key={routine.id}>
+          <div className="routine-card-top">
+            <div className="routine-icon"><RoutineIcon routine={routine} /></div>
+            <button className="small-icon-button" aria-label={`Edit ${routine.name}`} onClick={() => onEdit(routine)}><MoreHorizontal size={19} /></button>
+          </div>
+          <div className="routine-card-title"><h2>{routine.name}</h2>{routine.paused && <span className="paused-label">Paused</span>}</div>
+          {routine.anchor && <div className="routine-anchor"><Link2 size={13} />After {routine.anchor.charAt(0).toLowerCase() + routine.anchor.slice(1)}</div>}
+          <div className="routine-card-meta">
+            <span><Clock3 size={14} />{routine.windowEnd ? `${routine.time} – ${routine.windowEnd}` : routine.time}</span>
+            <span><Activity size={14} />{formatDuration(routine.duration)}</span>
+            {routine.reminder?.enabled && <span className="meta-reminder" title={reminderLabel(routine.reminder.offset)}><Bell size={14} /></span>}
+          </div>
+          {routine.frequency === 'flexible'
+            ? <div className="flex-frequency">{routine.timesPerWeek ?? 3}× a week <span className="middle-dot">·</span> any day</div>
+            : <div className="day-chips">{dayInitials.map((day, i) => <span className={routine.days.includes(dayLabels[i]) ? 'day-chip selected' : 'day-chip'} key={`${day}-${i}`}>{day}</span>)}</div>}
+          <div className="routine-card-divider" />
+          <div className="routine-habits-label">IN THIS ROUTINE <span>{routineHabits.length}</span></div>
+          <div className="routine-habit-stack">
+            {routineHabits.slice(0, 3).map((habit) => <div key={habit.id}><span className="tiny-check" data-tone={toneFor(habit.category)}><HabitIcon habit={habit} size={13} /></span>{habit.name}<span className="habit-duration">{habit.duration}m</span></div>)}
+            {routineHabits.length > 3 && <button className="more-habits" onClick={() => onEdit(routine)}>+{routineHabits.length - 3} more</button>}
+            {routineHabits.length === 0 && <div className="empty-inline compact-empty">Ready when you are. Add a habit from your collection.</div>}
+          </div>
+          {minimum.length > 0 && <div className="minimum-badge"><Feather size={13} />Minimum version: {minimum.length} {minimum.length === 1 ? 'habit' : 'habits'} <span className="middle-dot">·</span> {formatDuration(minimum.reduce((sum, habit) => sum + habit.duration, 0))}</div>}
+          <div className="routine-card-actions">
+            <button className="button button-quiet" onClick={() => onUpdate(routine.id, 'pause')}>{routine.paused ? 'Resume' : 'Pause'}</button>
+            <button className="button button-quiet" onClick={() => onUpdate(routine.id, 'duplicate')}><Copy size={14} /> Duplicate</button>
+            <button className="button button-quiet edit-button" onClick={() => onEdit(routine)}>Edit <ArrowRight size={14} /></button>
+          </div>
+        </article>
+      })}
+      <button className="new-routine-card" onClick={onAdd}><span className="new-routine-plus"><Plus size={20} /></span><strong>Start a new rhythm</strong><span>Make a routine that feels like yours.</span></button>
+    </div>
+    <div className="note-banner"><span className="note-banner-icon"><Sparkles size={17} /></span><span><strong>It can be smaller.</strong> Every routine can have a minimum version for the days that ask for less.</span><button onClick={onAdd}>Create one <ArrowRight size={14} /></button></div>
+  </>
+}
+
+/* ---------- Routine editor ---------- */
+const anchorSuggestions = ['Morning coffee', 'Brushing my teeth', 'Getting home', 'Lunch', 'Closing my laptop']
+const reminderOffsets = [0, 5, 10, 15, 30, 60]
+const dayPresets: { label: string; days: string[] }[] = [
+  { label: 'Every day', days: dayLabels },
+  { label: 'Weekdays', days: dayLabels.slice(0, 5) },
+  { label: 'Weekends', days: dayLabels.slice(5) },
+]
+
+function RoutineEditor({ routine, habits, onClose, onSave }: { routine?: Routine; habits: Habit[]; onClose: () => void; onSave: (routine: Routine, newHabits: Habit[], previousName?: string) => void }) {
+  const isNew = !routine
+  const [name, setName] = useState(routine?.name ?? '')
+  const [anchor, setAnchor] = useState(routine?.anchor ?? '')
+  const [frequency, setFrequency] = useState<'days' | 'flexible'>(routine?.frequency ?? 'days')
+  const [days, setDays] = useState<string[]>(routine?.days ?? dayLabels.slice(0, 5))
+  const [timesPerWeek, setTimesPerWeek] = useState(routine?.timesPerWeek ?? 3)
+  const [start, setStart] = useState(to24(routine?.time ?? '8:00 AM'))
+  const [hasWindow, setHasWindow] = useState(Boolean(routine?.windowEnd))
+  const [end, setEnd] = useState(to24(routine?.windowEnd ?? '9:00 AM'))
+  const initialMinutes = routine?.duration ?? 20
+  const [durationUnit, setDurationUnit] = useState<'min' | 'h'>(initialMinutes >= 60 && initialMinutes % 30 === 0 ? 'h' : 'min')
+  const [durationValue, setDurationValue] = useState(String(initialMinutes >= 60 && initialMinutes % 30 === 0 ? initialMinutes / 60 : initialMinutes))
+  const [habitIds, setHabitIds] = useState<string[]>(routine?.habitIds ?? [])
+  const [draftHabits, setDraftHabits] = useState<Habit[]>([])
+  const [habitQuery, setHabitQuery] = useState('')
+  const [reminder, setReminder] = useState<Reminder>(routine?.reminder ?? { enabled: false, offset: 10, nudge: true })
+  const [minimumIds, setMinimumIds] = useState<string[]>(routine?.minimumHabitIds ?? [])
+  const [notes, setNotes] = useState(routine?.notes ?? '')
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const pool = [...habits, ...draftHabits]
+  const chosen = habitIds.map((id) => pool.find((habit) => habit.id === id)).filter((habit): habit is Habit => Boolean(habit))
+  const available = habits.filter((habit) => !habitIds.includes(habit.id))
+  const habitsTotal = chosen.reduce((sum, habit) => sum + habit.duration, 0)
+  const minutes = Math.max(1, Math.round((Number(durationValue) || 0) * (durationUnit === 'h' ? 60 : 1)))
+  const minimum = chosen.filter((habit) => minimumIds.includes(habit.id))
+  const missingDays = frequency === 'days' && days.length === 0
+  const canSave = name.trim().length > 0 && !missingDays
+
+  function toggleDay(day: string) {
+    setDays((current) => current.includes(day) ? current.filter((item) => item !== day) : dayLabels.filter((item) => item === day || current.includes(item)))
+  }
+
+  function addHabit(value = habitQuery) {
+    const query = value.trim()
+    if (!query) return
+    const existing = pool.find((habit) => habit.name.toLowerCase() === query.toLowerCase())
+    if (existing) {
+      if (!habitIds.includes(existing.id)) setHabitIds((current) => [...current, existing.id])
+    } else {
+      const created: Habit = { id: `habit-${Date.now()}`, name: query, category: 'Lifestyle', duration: 10, time: from24(start), routine: name.trim() || 'Just for me' }
+      setDraftHabits((current) => [...current, created])
+      setHabitIds((current) => [...current, created.id])
+    }
+    setHabitQuery('')
+  }
+
+  function removeHabit(id: string) {
+    setHabitIds((current) => current.filter((item) => item !== id))
+    setMinimumIds((current) => current.filter((item) => item !== id))
+  }
+
+  function useHabitsTotal() {
+    setDurationUnit('min')
+    setDurationValue(String(habitsTotal))
+  }
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!canSave) return
+    const next: Routine = {
+      ...(routine ?? { id: `routine-${Date.now()}` }),
+      name: name.trim(),
+      anchor: anchor.trim() || undefined,
+      frequency,
+      days: frequency === 'days' ? days : routine?.days ?? dayLabels,
+      timesPerWeek,
+      time: from24(start),
+      windowEnd: hasWindow ? from24(end) : undefined,
+      duration: minutes,
+      habitIds,
+      reminder,
+      minimumHabitIds: minimumIds.filter((id) => habitIds.includes(id)),
+      notes: notes.trim() || undefined,
+    }
+    onSave(next, draftHabits.filter((habit) => habitIds.includes(habit.id)), routine?.name)
+  }
+
+  const summary = [
+    frequency === 'flexible' ? `${timesPerWeek}× a week, any day` : describeDays(days),
+    hasWindow ? `${from24(start)} – ${from24(end)}` : from24(start),
+    formatDuration(minutes),
+    reminder.enabled ? `reminder ${reminderLabel(reminder.offset).toLowerCase()}` : null,
+  ].filter(Boolean).join(' · ')
+
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+    <section className="modal editor" role="dialog" aria-modal="true" aria-labelledby="editor-title" data-tone="sage">
+      <form onSubmit={submit} className="editor-form">
+        <header className="editor-header">
+          <div className="modal-top">
+            <span className="modal-icon"><Repeat size={19} /></span>
+            <button type="button" className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={19} /></button>
+          </div>
+          <div className="eyebrow small-eyebrow">{isNew ? 'A NEW RHYTHM' : 'EDIT ROUTINE'}</div>
+          <h2 id="editor-title">{name.trim() || (isNew ? 'Untitled routine' : routine.name)}</h2>
+          <p className="editor-summary" aria-live="polite">{anchor.trim() && <><span className="summary-anchor">After {anchor.trim().charAt(0).toLowerCase() + anchor.trim().slice(1)}</span> · </>}{summary}</p>
+        </header>
+
+        <div className="editor-body">
+          <fieldset className="editor-section">
+            <legend>The basics</legend>
+            <label className="form-label">Routine name<input autoFocus={isNew} value={name} onChange={(event) => setName(event.target.value)} required maxLength={54} placeholder="A slower start" /></label>
+            <label className="form-label">
+              <span className="label-row">Anchor it to a moment <span className="label-hint">Optional</span></span>
+              <div className="prefix-input"><span>After</span><input value={anchor} onChange={(event) => setAnchor(event.target.value)} maxLength={40} placeholder="my morning coffee" /></div>
+            </label>
+            <div className="suggestion-chips" aria-label="Anchor suggestions">{anchorSuggestions.map((item) => <button type="button" key={item} className={`suggestion-chip ${anchor === item ? 'selected' : ''}`} onClick={() => setAnchor(anchor === item ? '' : item)}>{item}</button>)}</div>
+            <p className="field-help"><Lightbulb size={14} />Tying a routine to something you already do makes it easier to remember.</p>
+          </fieldset>
+
+          <fieldset className="editor-section">
+            <legend>When</legend>
+            <div className="segmented" role="radiogroup" aria-label="Frequency">
+              <button type="button" role="radio" aria-checked={frequency === 'days'} className={frequency === 'days' ? 'selected' : ''} onClick={() => setFrequency('days')}>On specific days</button>
+              <button type="button" role="radio" aria-checked={frequency === 'flexible'} className={frequency === 'flexible' ? 'selected' : ''} onClick={() => setFrequency('flexible')}>A few times a week</button>
+            </div>
+            {frequency === 'days' ? <>
+              <div className="day-picker">{dayLabels.map((day, i) => <button type="button" key={day} aria-pressed={days.includes(day)} aria-label={day} className={days.includes(day) ? 'selected' : ''} onClick={() => toggleDay(day)}>{dayInitials[i]}</button>)}</div>
+              <div className="preset-row">{dayPresets.map((preset) => <button type="button" key={preset.label} className={`text-chip ${preset.days.join() === days.join() ? 'selected' : ''}`} onClick={() => setDays(preset.days)}>{preset.label}</button>)}</div>
+              {missingDays && <p className="field-error">Pick at least one day, or switch to “A few times a week”.</p>}
+            </> : <div className="stepper-row">
+              <div className="stepper"><button type="button" aria-label="Fewer times" onClick={() => setTimesPerWeek((value) => Math.max(1, value - 1))} disabled={timesPerWeek <= 1}><Minus size={15} /></button><strong>{timesPerWeek}</strong><button type="button" aria-label="More times" onClick={() => setTimesPerWeek((value) => Math.min(7, value + 1))} disabled={timesPerWeek >= 7}><Plus size={15} /></button></div>
+              <span>times a week, whichever days work. No fixed schedule to fall behind on.</span>
+            </div>}
+            <div className="form-row">
+              <label className="form-label">{hasWindow ? 'From' : 'Start time'}<input type="time" value={start} onChange={(event) => setStart(event.target.value)} required /></label>
+              {hasWindow
+                ? <label className="form-label">Until<input type="time" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
+                : <label className="form-label">Duration<div className="unit-input"><input type="number" min="1" max={durationUnit === 'h' ? 12 : 600} step={durationUnit === 'h' ? 0.5 : 1} value={durationValue} onChange={(event) => setDurationValue(event.target.value)} aria-label="Duration" /><select value={durationUnit} onChange={(event) => setDurationUnit(event.target.value as 'min' | 'h')} aria-label="Unit"><option value="min">min</option><option value="h">hours</option></select></div></label>}
+            </div>
+            {hasWindow && <label className="form-label">Duration<div className="unit-input"><input type="number" min="1" max={durationUnit === 'h' ? 12 : 600} step={durationUnit === 'h' ? 0.5 : 1} value={durationValue} onChange={(event) => setDurationValue(event.target.value)} aria-label="Duration" /><select value={durationUnit} onChange={(event) => setDurationUnit(event.target.value as 'min' | 'h')} aria-label="Unit"><option value="min">min</option><option value="h">hours</option></select></div></label>}
+            <label className="switch-row"><span><strong>Flexible window</strong><span>Any time within a range, instead of an exact time.</span></span><input type="checkbox" role="switch" checked={hasWindow} onChange={(event) => setHasWindow(event.target.checked)} /></label>
+            {habitsTotal > 0 && habitsTotal !== minutes && <p className="field-help"><Clock3 size={14} />Your habits add up to {formatDuration(habitsTotal)}. <button type="button" className="inline-link" onClick={useHabitsTotal}>Use that</button></p>}
+          </fieldset>
+
+          <fieldset className="editor-section">
+            <legend>Habits in this routine <span className="legend-count">{chosen.length}</span></legend>
+            {chosen.length > 0 && <ol className="editor-habits">{chosen.map((habit) => <li key={habit.id} data-tone={toneFor(habit.category)}>
+              <span className="tiny-check"><HabitIcon habit={habit} size={13} /></span>
+              <span className="editor-habit-name">{habit.name}{draftHabits.some((item) => item.id === habit.id) && <span className="new-tag">New</span>}</span>
+              <span className="habit-duration">{habit.duration}m</span>
+              <button type="button" className="small-icon-button" aria-label={`Remove ${habit.name}`} onClick={() => removeHabit(habit.id)}><X size={15} /></button>
+            </li>)}</ol>}
+            <div className="add-habit-row">
+              <input list="habit-options" value={habitQuery} onChange={(event) => setHabitQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addHabit() } }} placeholder="Pick a habit or type a new one" aria-label="Add a habit" />
+              <datalist id="habit-options">{available.map((habit) => <option key={habit.id} value={habit.name} />)}</datalist>
+              <button type="button" className="button button-quiet" onClick={() => addHabit()} disabled={!habitQuery.trim()}><Plus size={14} /> Add</button>
+            </div>
+            {available.length > 0 && <div className="suggestion-chips">{available.slice(0, 4).map((habit) => <button type="button" key={habit.id} className="suggestion-chip" onClick={() => addHabit(habit.name)}><Plus size={12} />{habit.name}</button>)}</div>}
+          </fieldset>
+
+          {chosen.length > 0 && <fieldset className="editor-section minimum-section">
+            <legend><Feather size={15} /> Minimum version</legend>
+            <p className="section-help">For the days that ask for less. Choose what still counts as showing up.</p>
+            <div className="minimum-options">{chosen.map((habit) => <label key={habit.id} className={`check-pill ${minimumIds.includes(habit.id) ? 'selected' : ''}`}><input type="checkbox" checked={minimumIds.includes(habit.id)} onChange={() => setMinimumIds((current) => current.includes(habit.id) ? current.filter((id) => id !== habit.id) : [...current, habit.id])} />{habit.name}</label>)}</div>
+            {minimum.length > 0 && <p className="minimum-summary">On a low day: {minimum.length} {minimum.length === 1 ? 'habit' : 'habits'}, about {formatDuration(minimum.reduce((sum, habit) => sum + habit.duration, 0))}. Still a win.</p>}
+          </fieldset>}
+
+          <fieldset className="editor-section">
+            <legend>Reminders</legend>
+            <label className="switch-row"><span><strong>Remind me</strong><span>A quiet notification, never a guilt trip.</span></span><input type="checkbox" role="switch" checked={reminder.enabled} onChange={(event) => setReminder({ ...reminder, enabled: event.target.checked })} /></label>
+            {reminder.enabled && <>
+              <label className="form-label">When<select value={reminder.offset} onChange={(event) => setReminder({ ...reminder, offset: Number(event.target.value) })}>{reminderOffsets.map((offset) => <option key={offset} value={offset}>{reminderLabel(offset)}</option>)}</select></label>
+              <label className="check-row"><input type="checkbox" checked={reminder.nudge} onChange={(event) => setReminder({ ...reminder, nudge: event.target.checked })} /><span>If I miss it, offer the minimum version later</span></label>
+            </>}
+          </fieldset>
+
+          <fieldset className="editor-section">
+            <legend>Notes</legend>
+            <label className="form-label"><span className="visually-hidden">Notes</span><textarea value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} maxLength={280} placeholder="Why this matters to you, or what helps it go well" /></label>
+          </fieldset>
+        </div>
+
+        <footer className="modal-actions editor-actions">
+          <button type="button" className="button button-quiet" onClick={onClose}>Cancel</button>
+          <button type="submit" className="button button-primary" disabled={!canSave}><Check size={15} /> {isNew ? 'Create routine' : 'Save changes'}</button>
+        </footer>
+      </form>
+    </section>
+  </div>
+}
+
+function to24(time: string) {
+  const total = timeInMinutes(time)
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+}
+
+function from24(value: string) {
+  const [hours, minutes] = value.split(':').map(Number)
+  const period = hours >= 12 ? 'PM' : 'AM'
+  return `${hours % 12 || 12}:${String(minutes || 0).padStart(2, '0')} ${period}`
+}
+
+function formatDuration(minutes: number) {
+  if (minutes < 60) return `${minutes} min`
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return rest ? `${hours} h ${rest} min` : `${hours} h`
+}
+
+function reminderLabel(offset: number) {
+  if (offset === 0) return 'At start time'
+  return offset >= 60 ? `${offset / 60} h before` : `${offset} min before`
+}
+
+function describeDays(days: string[]) {
+  const key = days.join()
+  if (key === dayLabels.join()) return 'Every day'
+  if (key === dayLabels.slice(0, 5).join()) return 'Weekdays'
+  if (key === dayLabels.slice(5).join()) return 'Weekends'
+  return days.length ? days.join(', ') : 'No days yet'
 }
 
 function Habits({ habits, query, category, onSearch, onCategory, onAdd }: { habits: Habit[]; query: string; category: string; onSearch: (value: string) => void; onCategory: (value: string) => void; onAdd: () => void }) {
