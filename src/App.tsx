@@ -5,6 +5,7 @@ import {
   ArrowRight,
   ArrowUpRight,
   Bike,
+  Bed,
   Bell,
   BookOpen,
   Brain,
@@ -51,9 +52,9 @@ import {
   Sprout,
   Sun,
   Sunrise,
+  Target,
   Trash2,
   TrendingUp,
-  UserRound,
   Utensils,
   Wallet,
   X,
@@ -62,12 +63,15 @@ import {
 
 type Section = 'Overview' | 'Routines' | 'Habits' | 'Calendar' | 'Insights' | 'Profile' | 'Settings'
 type Status = 'complete' | 'partial' | 'skipped' | 'rescheduled'
-type Habit = { id: string; name: string; category: string; duration: number; time: string; routine: string }
+type Habit = {
+  id: string; name: string; category: string; duration: number; time: string; routine: string
+  icon?: string; frequency?: string; tinyVersion?: string; notes?: string
+}
 type Reminder = { enabled: boolean; offset: number; nudge: boolean }
 type Routine = {
   id: string; name: string; time: string; duration: number; days: string[]; habitIds: string[]; paused?: boolean
   anchor?: string; frequency?: 'days' | 'flexible'; timesPerWeek?: number; windowEnd?: string
-  reminder?: Reminder; minimumHabitIds?: string[]; notes?: string
+  reminder?: Reminder; minimumHabitIds?: string[]; notes?: string; icon?: string
 }
 type ActivityRecord = { status: Status; amount?: string; rescheduledTo?: string }
 type Profile = { name: string }
@@ -137,8 +141,21 @@ const habitIconRules: [RegExp, LucideIcon][] = [
 ]
 const categoryIcons: Record<string, LucideIcon> = { Health: HeartPulse, 'Personal Growth': GraduationCap, Work: Briefcase, Mindfulness: Flower2, Relationships: Heart, Lifestyle: Leaf }
 
+/* Icons people can pick for routines and habits. "Auto" (no key) keeps the
+   icon chosen from the name, category or time of day. */
+const iconLibrary: Record<string, LucideIcon> = {
+  sunrise: Sunrise, sun: Sun, moon: Moon, bed: Bed, coffee: Coffee, water: Droplets,
+  apple: Apple, meal: Utensils, walk: Footprints, strength: Dumbbell, bike: Bike, stretch: PersonStanding,
+  calm: Flower2, mind: Brain, book: BookOpen, journal: NotebookPen, learn: GraduationCap, work: Laptop,
+  music: Music, create: Palette, heart: Heart, grow: Sprout, tidy: Sparkles, money: Wallet,
+}
+
+function autoHabitIcon(name: string, category: string): LucideIcon {
+  return habitIconRules.find(([pattern]) => pattern.test(name))?.[1] ?? categoryIcons[category] ?? Leaf
+}
+
 function habitIcon(habit: Habit): LucideIcon {
-  return habitIconRules.find(([pattern]) => pattern.test(habit.name))?.[1] ?? categoryIcons[habit.category] ?? Leaf
+  return (habit.icon && iconLibrary[habit.icon]) || autoHabitIcon(habit.name, habit.category)
 }
 
 function HabitIcon({ habit, size = 18 }: { habit: Habit; size?: number }) {
@@ -150,11 +167,16 @@ function toneFor(category: string): Tone {
   return categoryTones[category] ?? 'beige'
 }
 
+function autoRoutineIcon(time: string): LucideIcon {
+  const minutes = timeInMinutes(time)
+  if (minutes < 12 * 60) return Sunrise
+  if (minutes >= 19 * 60) return Moon
+  return Coffee
+}
+
 function RoutineIcon({ routine, size = 20 }: { routine: Routine; size?: number }) {
-  const minutes = timeInMinutes(routine.time)
-  if (minutes < 12 * 60) return <Sunrise size={size} strokeWidth={2} />
-  if (minutes >= 19 * 60) return <Moon size={size} strokeWidth={2} />
-  return <Coffee size={size} strokeWidth={2} />
+  const Icon = (routine.icon && iconLibrary[routine.icon]) || autoRoutineIcon(routine.time)
+  return <Icon size={size} strokeWidth={2} />
 }
 
 function freshWorkspace(): Workspace {
@@ -181,7 +203,7 @@ function App() {
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('All habits')
-  const [modal, setModal] = useState<'routine' | 'habit' | null>(null)
+  const [habitEditor, setHabitEditor] = useState<{ habit?: Habit } | null>(null)
   const [routineEditor, setRoutineEditor] = useState<{ routine?: Routine } | null>(null)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [notice, setNotice] = useState('')
@@ -234,24 +256,53 @@ function App() {
     setNotice(action === 'pause' ? 'Routine status updated' : 'Routine duplicated')
   }
 
-  function saveItem(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const formData = new FormData(event.currentTarget)
-    const name = String(formData.get('name') || '').trim()
-    if (!name) return
-    if (modal === 'routine') {
-      const duration = Math.max(5, Number(formData.get('duration')) || 20)
-      const time = String(formData.get('time') || '8:00 AM')
-      const selectedDays = formData.getAll('days').map(String)
-      const days = selectedDays.length ? selectedDays : dayLabels
-      setWorkspace((current) => ({ ...current, routines: [...current.routines, { id: `routine-${Date.now()}`, name, time, duration, days, habitIds: [] }] }))
-      setNotice('Your routine is ready to shape')
-    } else {
-      const categoryName = String(formData.get('category') || 'Lifestyle')
-      setWorkspace((current) => ({ ...current, habits: [...current.habits, { id: `habit-${Date.now()}`, name, category: categoryName, duration: Math.max(1, Number(formData.get('duration')) || 10), time: 'Anytime', routine: 'Just for me' }] }))
-      setNotice('Habit added to your collection')
-    }
-    setModal(null)
+  function saveHabit(habit: Habit, routineId: string) {
+    setWorkspace((current) => {
+      const routine = current.routines.find((item) => item.id === routineId)
+      const next = { ...habit, routine: routine ? routine.name : 'Just for me' }
+      const exists = current.habits.some((item) => item.id === habit.id)
+      return {
+        ...current,
+        habits: exists ? current.habits.map((item) => item.id === habit.id ? next : item) : [...current.habits, next],
+        routines: current.routines.map((item) => {
+          const has = item.habitIds.includes(habit.id)
+          if (item.id === routineId && !has) return { ...item, habitIds: [...item.habitIds, habit.id] }
+          if (item.id !== routineId && has) return { ...item, habitIds: item.habitIds.filter((id) => id !== habit.id), minimumHabitIds: item.minimumHabitIds?.filter((id) => id !== habit.id) }
+          return item
+        }),
+      }
+    })
+    setNotice(habitEditor?.habit ? 'Habit updated' : 'Habit added to your collection')
+    setHabitEditor(null)
+  }
+
+  function deleteHabit(habitId: string) {
+    setWorkspace((current) => ({
+      ...current,
+      habits: current.habits.filter((habit) => habit.id !== habitId),
+      routines: current.routines.map((routine) => ({ ...routine, habitIds: routine.habitIds.filter((id) => id !== habitId), minimumHabitIds: routine.minimumHabitIds?.filter((id) => id !== habitId) })),
+      records: Object.fromEntries(Object.entries(current.records).filter(([key]) => !key.endsWith(`:${habitId}`))),
+    }))
+    setHabitEditor(null)
+    setNotice('Habit deleted')
+  }
+
+  function deleteRoutine(routineId: string) {
+    setWorkspace((current) => {
+      const routine = current.routines.find((item) => item.id === routineId)
+      return {
+        ...current,
+        routines: current.routines.filter((item) => item.id !== routineId),
+        habits: current.habits.map((habit) => routine && habit.routine === routine.name ? { ...habit, routine: 'Just for me' } : habit),
+      }
+    })
+    setRoutineEditor(null)
+    setNotice('Routine deleted. Its habits are still in your collection')
+  }
+
+  function openRoutineById(routineId: string) {
+    const routine = workspace.routines.find((item) => item.id === routineId)
+    if (routine) setRoutineEditor({ routine })
   }
 
   function saveRoutine(routine: Routine, newHabits: Habit[], previousName?: string) {
@@ -290,6 +341,7 @@ function App() {
   }
 
   const closeRoutineEditor = useCallback(() => setRoutineEditor(null), [])
+  const closeHabitEditor = useCallback(() => setHabitEditor(null), [])
 
   function navigateTo(next: Section) {
     setSection(next)
@@ -304,8 +356,6 @@ function App() {
         <div className="nav-caption">YOUR SPACE</div>
         <nav className="primary-nav" aria-label="Main navigation">{navigation.map(({ name, icon: Icon }) => <button key={name} className={`nav-item ${section === name ? 'active' : ''}`} onClick={() => navigateTo(name)} aria-current={section === name ? 'page' : undefined}><span className="nav-icon"><Icon size={18} strokeWidth={1.75} /></span><span>{name}</span></button>)}</nav>
         <div className="sidebar-bottom">
-          
-          <button className={`nav-item secondary-nav ${section === 'Profile' ? 'active' : ''}`} onClick={() => navigateTo('Profile')} aria-current={section === 'Profile' ? 'page' : undefined}><span className="nav-icon"><UserRound size={18} strokeWidth={1.75} /></span><span>Profile</span></button>
           <button className={`nav-item secondary-nav ${section === 'Settings' ? 'active' : ''}`} onClick={() => navigateTo('Settings')} aria-current={section === 'Settings' ? 'page' : undefined}><span className="nav-icon"><SlidersHorizontal size={18} strokeWidth={1.75} /></span><span>Settings</span></button>
           <button className="profile-row" onClick={() => navigateTo('Profile')}><div className="avatar">{initial}</div><div className="profile-copy"><strong>{profileName}</strong><span>My personal space</span></div><ChevronRight size={16} /></button>
         </div>
@@ -315,19 +365,19 @@ function App() {
       <main className="main-area">
         <header className="topbar"><button className="icon-button menu-button" aria-label="Open navigation" onClick={() => setMobileMenuOpen(true)}><Menu size={20} /></button><div className="breadcrumb"><span>My space</span><ChevronRight size={14} /><strong>{section}</strong></div><div className="topbar-right"><span className="date-pill"><span className="date-dot" />{new Intl.DateTimeFormat('en', { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date())}</span><button className="avatar top-avatar" aria-label="Open profile" onClick={() => navigateTo('Profile')}>{initial}</button></div></header>
         <div className="content-wrap">
-          {section === 'Overview' && <Overview name={firstName} habits={todayActivities} routines={workspace.routines} records={workspace.records} progress={progress} onNavigate={navigateTo} onRecord={recordActivity} onAdd={() => setModal('habit')} />}
+          {section === 'Overview' && <Overview name={firstName} habits={todayActivities} routines={workspace.routines} records={workspace.records} progress={progress} onNavigate={navigateTo} onRecord={recordActivity} onAdd={() => setHabitEditor({})} />}
           {section === 'Routines' && <Routines routines={workspace.routines} habits={workspace.habits} onAdd={() => setRoutineEditor({})} onEdit={(routine) => setRoutineEditor({ routine })} onUpdate={updateRoutine} />}
-          {section === 'Habits' && <Habits habits={workspace.habits} query={search} category={category} onSearch={setSearch} onCategory={setCategory} onAdd={() => setModal('habit')} />}
+          {section === 'Habits' && <Habits habits={workspace.habits} query={search} category={category} onSearch={setSearch} onCategory={setCategory} onAdd={() => setHabitEditor({})} onEdit={(habit) => setHabitEditor({ habit })} />}
           {section === 'Calendar' && <CalendarView habits={workspace.habits} routines={workspace.routines} records={workspace.records} selectedDate={selectedDate} onDate={setSelectedDate} onRecord={recordActivity} />}
-          {section === 'Insights' && <Insights records={workspace.records} onNavigate={navigateTo} />}
+          {section === 'Insights' && <Insights workspace={workspace} onNavigate={navigateTo} onEditRoutine={openRoutineById} />}
           {section === 'Profile' && <ProfileView name={profileName} workspace={workspace} onSave={saveProfile} />}
           {section === 'Settings' && <SettingsView recordCount={Object.keys(workspace.records).length} onClearHistory={clearHistory} onRestore={restoreSample} />}
           <footer className="page-footer"><span>Made for real life, not perfect streaks.</span><span className="footer-mark"><Leaf size={13} /> KINDA</span></footer>
         </div>
       </main>
       {notice && <div className="toast" role="status"><span className="toast-icon"><Check size={14} /></span>{notice}</div>}
-      {modal && <ItemModal kind={modal} onClose={() => setModal(null)} onSave={saveItem} />}
-      {routineEditor && <RoutineEditor routine={routineEditor.routine} habits={workspace.habits} onClose={closeRoutineEditor} onSave={saveRoutine} />}
+      {habitEditor && <HabitEditor habit={habitEditor.habit} routines={workspace.routines} onClose={closeHabitEditor} onSave={saveHabit} onDelete={deleteHabit} />}
+      {routineEditor && <RoutineEditor routine={routineEditor.routine} habits={workspace.habits} onClose={closeRoutineEditor} onSave={saveRoutine} onDelete={deleteRoutine} />}
     </div>
   )
 }
@@ -424,9 +474,10 @@ const dayPresets: { label: string; days: string[] }[] = [
   { label: 'Weekends', days: dayLabels.slice(5) },
 ]
 
-function RoutineEditor({ routine, habits, onClose, onSave }: { routine?: Routine; habits: Habit[]; onClose: () => void; onSave: (routine: Routine, newHabits: Habit[], previousName?: string) => void }) {
+function RoutineEditor({ routine, habits, onClose, onSave, onDelete }: { routine?: Routine; habits: Habit[]; onClose: () => void; onSave: (routine: Routine, newHabits: Habit[], previousName?: string) => void; onDelete: (id: string) => void }) {
   const isNew = !routine
   const [name, setName] = useState(routine?.name ?? '')
+  const [icon, setIcon] = useState(routine?.icon)
   const [anchor, setAnchor] = useState(routine?.anchor ?? '')
   const [frequency, setFrequency] = useState<'days' | 'flexible'>(routine?.frequency ?? 'days')
   const [days, setDays] = useState<string[]>(routine?.days ?? dayLabels.slice(0, 5))
@@ -444,12 +495,9 @@ function RoutineEditor({ routine, habits, onClose, onSave }: { routine?: Routine
   const [minimumIds, setMinimumIds] = useState<string[]>(routine?.minimumHabitIds ?? [])
   const [notes, setNotes] = useState(routine?.notes ?? '')
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  useEscape(onClose)
 
+  const PreviewIcon = (icon && iconLibrary[icon]) || autoRoutineIcon(from24(start))
   const pool = [...habits, ...draftHabits]
   const chosen = habitIds.map((id) => pool.find((habit) => habit.id === id)).filter((habit): habit is Habit => Boolean(habit))
   const available = habits.filter((habit) => !habitIds.includes(habit.id))
@@ -493,6 +541,7 @@ function RoutineEditor({ routine, habits, onClose, onSave }: { routine?: Routine
     const next: Routine = {
       ...(routine ?? { id: `routine-${Date.now()}` }),
       name: name.trim(),
+      icon,
       anchor: anchor.trim() || undefined,
       frequency,
       days: frequency === 'days' ? days : routine?.days ?? dayLabels,
@@ -520,7 +569,7 @@ function RoutineEditor({ routine, habits, onClose, onSave }: { routine?: Routine
       <form onSubmit={submit} className="editor-form">
         <header className="editor-header">
           <div className="modal-top">
-            <span className="modal-icon"><Repeat size={19} /></span>
+            <span className="modal-icon"><PreviewIcon size={19} /></span>
             <button type="button" className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={19} /></button>
           </div>
           <div className="eyebrow small-eyebrow">{isNew ? 'A NEW RHYTHM' : 'EDIT ROUTINE'}</div>
@@ -532,6 +581,7 @@ function RoutineEditor({ routine, habits, onClose, onSave }: { routine?: Routine
           <fieldset className="editor-section">
             <legend>The basics</legend>
             <label className="form-label">Routine name<input autoFocus={isNew} value={name} onChange={(event) => setName(event.target.value)} required maxLength={54} placeholder="A slower start" /></label>
+            <div className="form-label"><span>Icon</span><IconPicker value={icon} auto={autoRoutineIcon(from24(start))} onChange={setIcon} /></div>
             <label className="form-label">
               <span className="label-row">Anchor it to a moment <span className="label-hint">Optional</span></span>
               <div className="prefix-input"><span>After</span><input value={anchor} onChange={(event) => setAnchor(event.target.value)} maxLength={40} placeholder="my morning coffee" /></div>
@@ -603,10 +653,7 @@ function RoutineEditor({ routine, habits, onClose, onSave }: { routine?: Routine
           </fieldset>
         </div>
 
-        <footer className="modal-actions editor-actions">
-          <button type="button" className="button button-quiet" onClick={onClose}>Cancel</button>
-          <button type="submit" className="button button-primary" disabled={!canSave}><Check size={15} /> {isNew ? 'Create routine' : 'Save changes'}</button>
-        </footer>
+        <EditorFooter isNew={isNew} canSave={canSave} saveLabel={isNew ? 'Create routine' : 'Save changes'} itemName={routine?.name ?? ''} deleteDetail="Its habits stay in your collection." onCancel={onClose} onDelete={() => routine && onDelete(routine.id)} />
       </form>
     </section>
   </div>
@@ -643,9 +690,9 @@ function describeDays(days: string[]) {
   return days.length ? days.join(', ') : 'No days yet'
 }
 
-function Habits({ habits, query, category, onSearch, onCategory, onAdd }: { habits: Habit[]; query: string; category: string; onSearch: (value: string) => void; onCategory: (value: string) => void; onAdd: () => void }) {
+function Habits({ habits, query, category, onSearch, onCategory, onAdd, onEdit }: { habits: Habit[]; query: string; category: string; onSearch: (value: string) => void; onCategory: (value: string) => void; onAdd: () => void; onEdit: (habit: Habit) => void }) {
   const filtered = habits.filter((habit) => (category === 'All habits' || habit.category === category) && habit.name.toLowerCase().includes(query.toLowerCase()))
-  return <><PageIntro tone="butter" eyebrow="HABITS" title={<>Little things. <em>Big changes.</em></>} subtitle="The small moments that make a life feel more like yours." action={<button className="button button-primary" onClick={onAdd}><Plus size={17} /> New habit</button>} /><div className="habit-toolbar"><div className="filter-tabs" role="tablist" aria-label="Filter by category">{categories.map((item) => <button key={item} role="tab" aria-selected={category === item} data-tone={item === 'All habits' ? 'orange' : toneFor(item)} className={category === item ? 'filter-tab selected' : 'filter-tab'} onClick={() => onCategory(item)}>{item !== 'All habits' && <span className="tone-dot" />}{item}</button>)}</div><label className="search-box"><Search size={16} /><input value={query} onChange={(event) => onSearch(event.target.value)} placeholder="Find a habit" aria-label="Search habits" />{query && <button aria-label="Clear search" onClick={() => onSearch('')}><X size={14} /></button>}</label></div><div className="habit-results-heading"><span>{filtered.length} {filtered.length === 1 ? 'habit' : 'habits'}</span><button className="sort-button">Recently added <ChevronDown size={14} /></button></div>{filtered.length ? <div className="habit-grid">{filtered.map((habit) => <article className="habit-card" data-tone={toneFor(habit.category)} key={habit.id}><div className="habit-card-icon"><HabitIcon habit={habit} size={21} /></div><button className="small-icon-button habit-more" aria-label={`More options for ${habit.name}`}><MoreHorizontal size={18} /></button><div className="habit-card-category">{habit.category}</div><h2>{habit.name}</h2><div className="habit-card-meta"><span><Clock3 size={14} />{habit.duration} min</span><span>{habit.routine}</span></div><div className="habit-card-bottom"><span className="frequency-label"><span className="frequency-dot" /> A few times a week</span><button className="round-action" aria-label={`Open ${habit.name}`}><ArrowUpRight size={16} /></button></div></article>)}</div> : <div className="empty-state"><span className="empty-state-icon"><Search size={22} /></span><h2>No habits found</h2><p>Try another search or choose a different category.</p><button className="button button-quiet" onClick={() => { onSearch(''); onCategory('All habits') }}>Clear filters</button></div>}</>
+  return <><PageIntro tone="butter" eyebrow="HABITS" title={<>Little things. <em>Big changes.</em></>} subtitle="The small moments that make a life feel more like yours." action={<button className="button button-primary" onClick={onAdd}><Plus size={17} /> New habit</button>} /><div className="habit-toolbar"><div className="filter-tabs" role="tablist" aria-label="Filter by category">{categories.map((item) => <button key={item} role="tab" aria-selected={category === item} data-tone={item === 'All habits' ? 'orange' : toneFor(item)} className={category === item ? 'filter-tab selected' : 'filter-tab'} onClick={() => onCategory(item)}>{item !== 'All habits' && <span className="tone-dot" />}{item}</button>)}</div><label className="search-box"><Search size={16} /><input value={query} onChange={(event) => onSearch(event.target.value)} placeholder="Find a habit" aria-label="Search habits" />{query && <button aria-label="Clear search" onClick={() => onSearch('')}><X size={14} /></button>}</label></div><div className="habit-results-heading"><span>{filtered.length} {filtered.length === 1 ? 'habit' : 'habits'}</span><button className="sort-button">Recently added <ChevronDown size={14} /></button></div>{filtered.length ? <div className="habit-grid">{filtered.map((habit) => <article className="habit-card" data-tone={toneFor(habit.category)} key={habit.id}><div className="habit-card-icon"><HabitIcon habit={habit} size={21} /></div><button className="small-icon-button habit-more" aria-label={`Edit ${habit.name}`} onClick={() => onEdit(habit)}><MoreHorizontal size={18} /></button><div className="habit-card-category">{habit.category}</div><h2>{habit.name}</h2><div className="habit-card-meta"><span><Clock3 size={14} />{habit.duration} min</span><span>{habit.routine}</span></div>{habit.tinyVersion && <div className="habit-tiny"><Feather size={12} />Tiny: {habit.tinyVersion}</div>}<div className="habit-card-bottom"><span className="frequency-label"><span className="frequency-dot" /> {habit.frequency ?? 'A few times a week'}</span><button className="round-action" aria-label={`Edit ${habit.name}`} onClick={() => onEdit(habit)}><ArrowUpRight size={16} /></button></div></article>)}</div> : <div className="empty-state"><span className="empty-state-icon"><Search size={22} /></span><h2>No habits found</h2><p>Try another search or choose a different category.</p><button className="button button-quiet" onClick={() => { onSearch(''); onCategory('All habits') }}>Clear filters</button></div>}</>
 }
 
 function CalendarView({ habits, routines, records, selectedDate, onDate, onRecord }: { habits: Habit[]; routines: Routine[]; records: Record<string, ActivityRecord>; selectedDate: Date; onDate: (date: Date) => void; onRecord: (habitId: string, status: Status) => void }) {
@@ -667,10 +714,162 @@ function CalendarView({ habits, routines, records, selectedDate, onDate, onRecor
   })}</div> : <div className="calendar-empty"><span className="empty-state-icon"><Sun size={20} /></span><strong>A little open space.</strong><span>No planned activities. Your day belongs to you.</span></div>}<div className="calendar-legend"><span><i className="legend-dot planned" />Planned</span><span><i className="legend-dot complete" />Complete</span><span><i className="legend-dot partial" />Partial</span><span><i className="legend-dot skipped" />Skipped</span></div></section><div className="calendar-footnote"><Sparkles size={16} /><span>Nothing is locked in. Dragging activities to new times will be available as your plan grows.</span></div></>
 }
 
-function Insights({ records, onNavigate }: { records: Record<string, ActivityRecord>; onNavigate: (section: Section) => void }) {
+/* ---------- Insights: patterns from the plan and the history ---------- */
+type InsightKind = 'working' | 'improve' | 'idea'
+type Insight = { id: string; kind: InsightKind; title: string; body: string; stat?: string; sample?: boolean; action?: { label: string; routineId?: string; section?: Section } }
+
+const insightKinds: Record<InsightKind, { label: string; tone: Tone; icon: LucideIcon }> = {
+  working: { label: 'Working well', tone: 'sage', icon: TrendingUp },
+  improve: { label: 'Could be easier', tone: 'butter', icon: Target },
+  idea: { label: 'Try this', tone: 'beige', icon: Lightbulb },
+}
+
+function buildInsights({ habits, routines, records }: Workspace): Insight[] {
+  const insights: Insight[] = []
+  const habitName = (id: string) => habits.find((habit) => habit.id === id)?.name ?? 'A habit'
+  const entries = Object.entries(records).map(([key, record]) => {
+    const split = key.lastIndexOf(':')
+    return { habitId: key.slice(split + 1), day: new Date(key.slice(0, split)).getDay(), record }
+  })
+  const count = (list: typeof entries, statuses: Status[]) => list.filter((entry) => statuses.includes(entry.record.status)).length
+
+  /* From the history (only once there is enough of it) */
+  if (entries.length >= 3) {
+    const byHabit = new Map<string, typeof entries>()
+    entries.forEach((entry) => byHabit.set(entry.habitId, [...(byHabit.get(entry.habitId) ?? []), entry]))
+    const ranked = [...byHabit.entries()].map(([id, list]) => ({ id, done: count(list, ['complete']), missed: count(list, ['skipped', 'rescheduled']) }))
+    const steadiest = [...ranked].sort((a, b) => b.done - a.done)[0]
+    if (steadiest?.done >= 2) insights.push({ id: 'steadiest', kind: 'working', title: `${habitName(steadiest.id)} is your steadiest habit`, body: 'Whatever makes this one easy, its time, its size or its place in a routine, is worth borrowing for the others.', stat: `${steadiest.done} times done` })
+    const slipping = [...ranked].sort((a, b) => b.missed - a.missed)[0]
+    if (slipping?.missed >= 2) {
+      const routine = routines.find((item) => item.habitIds.includes(slipping.id))
+      insights.push({ id: 'slipping', kind: 'improve', title: `${habitName(slipping.id)} keeps getting moved`, body: 'Skipping it is not a failure, it is a signal. A smaller version or a different time might fit better.', stat: `${slipping.missed} times skipped or moved`, action: routine ? { label: `Adjust ${routine.name}`, routineId: routine.id } : { label: 'Edit habits', section: 'Habits' } })
+    }
+    const partial = count(entries, ['partial'])
+    if (partial >= 2) insights.push({ id: 'partial', kind: 'working', title: 'Partial progress is adding up', body: 'On days you could not do it all, you still did something. That is how habits survive busy weeks.', stat: `${partial} partial days` })
+    const doneByDay = dayLabels.map((_, index) => count(entries.filter((entry) => (entry.day + 6) % 7 === index), ['complete']))
+    const bestDay = doneByDay.indexOf(Math.max(...doneByDay))
+    if (doneByDay[bestDay] >= 2) insights.push({ id: 'best-day', kind: 'working', title: `${dayNames[bestDay]}s tend to go well`, body: 'Notice what is different about that day. A little of it could carry into the rest of the week.', stat: `${doneByDay[bestDay]} moments done` })
+  } else {
+    insights.push(
+      { id: 'sample-friday', kind: 'working', sample: true, title: 'Fridays are your strongest day', body: 'You finished most of what you planned on Fridays. Shorter plans seem to help: Friday holds the fewest habits.', stat: '88% of planned moments' },
+      { id: 'sample-weekend', kind: 'improve', sample: true, title: 'Weekends dip below the rest of the week', body: 'Your plan keeps weekday times on Saturday. A later start, or a weekend-only routine, could match how those days really go.', stat: '37% on Saturdays', action: { label: 'Look at your routines', section: 'Routines' } },
+    )
+  }
+
+  /* From the plan itself (always real) */
+  const active = routines.filter((routine) => !routine.paused)
+  const routineHabits = (routine: Routine) => habits.filter((habit) => routine.habitIds.includes(habit.id))
+
+  const weekly = (filter: (minutes: number) => boolean) => active.filter((routine) => filter(timeInMinutes(routine.time))).reduce((sum, routine) => sum + routine.duration * (routine.frequency === 'flexible' ? routine.timesPerWeek ?? 3 : routine.days.length), 0)
+  const mornings = weekly((minutes) => minutes < 12 * 60)
+  const evenings = weekly((minutes) => minutes >= 17 * 60)
+  if (mornings && evenings && Math.abs(mornings - evenings) >= 20) {
+    const heavier = evenings > mornings ? 'evenings' : 'mornings'
+    const lighter = heavier === 'evenings' ? 'mornings' : 'evenings'
+    const heavyRoutine = [...active].filter((routine) => heavier === 'evenings' ? timeInMinutes(routine.time) >= 17 * 60 : timeInMinutes(routine.time) < 12 * 60).sort((a, b) => b.duration - a.duration)[0]
+    insights.push({ id: 'balance', kind: 'improve', title: `Your ${heavier} carry more than your ${lighter}`, body: `You plan ${formatDuration(Math.max(mornings, evenings))} a week in the ${heavier.slice(0, -1)} and ${formatDuration(Math.min(mornings, evenings))} in the ${lighter.slice(0, -1)}. Would moving one habit feel kinder?`, stat: `${formatDuration(Math.abs(mornings - evenings))} difference`, action: heavyRoutine ? { label: `Rebalance ${heavyRoutine.name}`, routineId: heavyRoutine.id } : undefined })
+  }
+
+  active.forEach((routine) => {
+    const total = routineHabits(routine).reduce((sum, habit) => sum + habit.duration, 0)
+    if (total > routine.duration + 5) insights.push({ id: `tight-${routine.id}`, kind: 'improve', title: `${routine.name} needs more time than it has`, body: `Its habits add up to ${formatDuration(total)}, but the routine allows ${formatDuration(routine.duration)}. Tight plans are the first to slip.`, stat: `${formatDuration(total - routine.duration)} short`, action: { label: 'Adjust the time', routineId: routine.id } })
+  })
+
+  const longest = [...active].sort((a, b) => b.duration - a.duration)[0]
+  if (longest && (longest.duration >= 45 || longest.habitIds.length >= 4) && !longest.minimumHabitIds?.length) insights.push({ id: 'longest', kind: 'improve', title: `${longest.name} is your biggest routine`, body: 'Big routines are the hardest to start on a tired day. A minimum version gives you a smaller door in.', stat: `${formatDuration(longest.duration)} · ${longest.habitIds.length} habits`, action: { label: 'Add a minimum version', routineId: longest.id } })
+
+  const perDay = dayLabels.map((day) => active.filter((routine) => routine.frequency !== 'flexible' && routine.days.includes(day)).length)
+  const busiest = perDay.indexOf(Math.max(...perDay))
+  const quietest = perDay.indexOf(Math.min(...perDay))
+  if (perDay[busiest] - perDay[quietest] >= 2) insights.push({ id: 'busy-day', kind: 'improve', title: `${dayNames[busiest]} is your busiest day`, body: `It holds ${perDay[busiest]} routines while ${dayNames[quietest]} holds ${perDay[quietest] || 'none'}. Spreading one out could make both days feel lighter.`, stat: `${perDay[busiest]} vs ${perDay[quietest]} routines`, action: { label: 'See your week', section: 'Calendar' } })
+
+  const withoutMinimum = active.filter((routine) => routine.habitIds.length > 1 && !routine.minimumHabitIds?.length)
+  if (withoutMinimum.length && !insights.some((item) => item.id === 'longest' && item.action?.routineId === withoutMinimum[0].id)) insights.push({ id: 'minimum', kind: 'idea', title: `Give ${withoutMinimum[0].name} a minimum version`, body: 'Decide now what still counts on a low-energy day, so future you does not have to.', stat: withoutMinimum.length > 1 ? `${withoutMinimum.length} routines without one` : undefined, action: { label: 'Set it up', routineId: withoutMinimum[0].id } })
+
+  const unanchored = active.find((routine) => !routine.anchor)
+  if (unanchored) insights.push({ id: 'anchor', kind: 'idea', title: `Anchor ${unanchored.name} to a moment`, body: 'Routines tied to something you already do, like coffee or getting home, are easier to remember than a time on the clock.', action: { label: 'Add an anchor', routineId: unanchored.id } })
+
+  const noReminder = active.filter((routine) => !routine.reminder?.enabled)
+  if (noReminder.length) insights.push({ id: 'reminder', kind: 'idea', title: noReminder.length === active.length ? 'No reminders are on yet' : `${noReminder[0].name} has no reminder`, body: 'A quiet nudge a few minutes before can be the difference between remembering and realising at night.', stat: `${noReminder.length} of ${active.length} routines`, action: { label: 'Turn one on', routineId: noReminder[0].id } })
+
+  const loose = habits.filter((habit) => !routines.some((routine) => routine.habitIds.includes(habit.id)))
+  if (loose.length) insights.push({ id: 'loose', kind: 'idea', title: `${loose.length} ${loose.length === 1 ? 'habit lives' : 'habits live'} on their own`, body: 'Habits inside a routine get done more often, because one step leads to the next.', stat: loose.slice(0, 2).map((habit) => habit.name).join(', '), action: { label: 'Find them a home', section: 'Habits' } })
+
+  const paused = routines.filter((routine) => routine.paused)
+  if (paused.length) insights.push({ id: 'paused', kind: 'idea', title: `${paused[0].name} is on pause`, body: 'Pausing is allowed. When you are ready, resume it, make it smaller, or let it go without guilt.', action: { label: 'Review it', routineId: paused[0].id } })
+
+  if (active.length && insights.filter((item) => item.kind === 'working').length === 0) insights.push({ id: 'planned', kind: 'working', title: 'You have a plan that fits on a page', body: `${active.length} ${active.length === 1 ? 'routine' : 'routines'} and ${habits.length} habits. Small enough to keep, big enough to matter.` })
+
+  const order: InsightKind[] = ['working', 'improve', 'idea']
+  return insights.sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind))
+}
+
+const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
+function Insights({ workspace, onNavigate, onEditRoutine }: { workspace: Workspace; onNavigate: (section: Section) => void; onEditRoutine: (routineId: string) => void }) {
+  const records = workspace.records
   const completed = Object.values(records).filter((record) => record.status === 'complete').length
   const partial = Object.values(records).filter((record) => record.status === 'partial').length
-  return <><PageIntro tone="sage" eyebrow="INSIGHTS" title={<>Look how far <em>you've come.</em></>} subtitle="A little reflection can help you make a plan that fits better." action={<button className="period-button">This week <ChevronDown size={15} /></button>} /><div className="insight-notice"><span className="sample-pill">SAMPLE PREVIEW</span><span>Preview metrics show sample patterns. Your real insights will take shape as you log activity.</span></div><div className="insight-metrics"><article className="metric-card"><span className="metric-label">THIS WEEK</span><div className="metric-value">68<span>%</span><span className="metric-trend"><ArrowUpRight size={15} /> 8%</span></div><span className="metric-caption">of planned moments, at your pace</span><div className="metric-sparkline"><span style={{ height: '28%' }} /><span style={{ height: '42%' }} /><span style={{ height: '38%' }} /><span style={{ height: '57%' }} /><span style={{ height: '49%' }} /><span style={{ height: '75%' }} /><span style={{ height: '64%' }} /></div></article><article className="metric-card metric-sage"><span className="metric-label">RECORDED SO FAR</span><div className="metric-value">{completed}<span> moments</span></div><span className="metric-caption">{partial} partial progress count, too</span><div className="metric-inline-progress"><span style={{ width: `${Math.min(completed * 20, 100)}%` }} /></div></article><article className="metric-card metric-highlight"><span className="metric-label">A DAY THAT FITS</span><div className="metric-value">Tuesday</div><span className="metric-caption">has been a gentle, steady rhythm</span><div className="metric-highlight-icon"><Sun size={23} /></div></article></div><div className="insights-lower"><section className="panel consistency-panel"><div className="panel-heading"><div><h2>Weekly consistency</h2></div><span className="sample-pill">SAMPLE</span></div><div className="consistency-chart">{[['Mon', 42], ['Tue', 78], ['Wed', 55], ['Thu', 68], ['Fri', 88], ['Sat', 37], ['Sun', 52]].map(([day, value]) => <div className="consistency-day" key={day}><span className="consistency-value">{value}%</span><span className="consistency-track"><i className={day === 'Fri' ? 'highlight-bar' : ''} style={{ height: `${value}%` }} /></span><span className="consistency-label">{day}</span></div>)}</div></section><section className="panel reflection-panel"><div className="panel-heading"><div><h2>Keep what fits</h2></div><span className="reflection-icon"><Sparkles size={17} /></span></div><p>It looks like your mornings have a little more room than your evenings. Would a shorter evening routine feel kinder?</p><button className="text-button" onClick={() => onNavigate('Routines')}>Explore your routines <ArrowRight size={15} /></button></section></div><div className="insight-bottom-note"><Heart size={16} /><span>No streaks to protect here. Missing a day is information, not a setback.</span></div></>
+  const insights = buildInsights(workspace)
+  const [spotlight, setSpotlight] = useState(0)
+  const [filter, setFilter] = useState<InsightKind | 'all'>('all')
+  const [expanded, setExpanded] = useState(false)
+  const current = insights[spotlight % Math.max(insights.length, 1)]
+  const filtered = insights.filter((item) => filter === 'all' || item.kind === filter)
+  const visible = expanded ? filtered : filtered.slice(0, 4)
+
+  function act(insight: Insight) {
+    if (insight.action?.routineId) onEditRoutine(insight.action.routineId)
+    else if (insight.action?.section) onNavigate(insight.action.section)
+  }
+
+  function showAll() {
+    setExpanded(true)
+    document.getElementById('patterns')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+  return <><PageIntro tone="sage" eyebrow="INSIGHTS" title={<>Look how far <em>you've come.</em></>} subtitle="A little reflection can help you make a plan that fits better." action={<button className="period-button">This week <ChevronDown size={15} /></button>} /><div className="insight-notice"><span className="sample-pill">SAMPLE PREVIEW</span><span>Preview metrics show sample patterns. Your real insights will take shape as you log activity.</span></div><div className="insight-metrics"><article className="metric-card"><span className="metric-label">THIS WEEK</span><div className="metric-value">68<span>%</span><span className="metric-trend"><ArrowUpRight size={15} /> 8%</span></div><span className="metric-caption">of planned moments, at your pace</span><div className="metric-sparkline"><span style={{ height: '28%' }} /><span style={{ height: '42%' }} /><span style={{ height: '38%' }} /><span style={{ height: '57%' }} /><span style={{ height: '49%' }} /><span style={{ height: '75%' }} /><span style={{ height: '64%' }} /></div></article><article className="metric-card metric-sage"><span className="metric-label">RECORDED SO FAR</span><div className="metric-value">{completed}<span> moments</span></div><span className="metric-caption">{partial} partial progress count, too</span><div className="metric-inline-progress"><span style={{ width: `${Math.min(completed * 20, 100)}%` }} /></div></article><article className="metric-card metric-highlight"><span className="metric-label">A DAY THAT FITS</span><div className="metric-value">Tuesday</div><span className="metric-caption">has been a gentle, steady rhythm</span><div className="metric-highlight-icon"><Sun size={23} /></div></article></div><div className="insights-lower"><section className="panel consistency-panel"><div className="panel-heading"><div><h2>Weekly consistency</h2></div><span className="sample-pill">SAMPLE</span></div><div className="consistency-chart">{[['Mon', 42], ['Tue', 78], ['Wed', 55], ['Thu', 68], ['Fri', 88], ['Sat', 37], ['Sun', 52]].map(([day, value]) => <div className="consistency-day" key={day}><span className="consistency-value">{value}%</span><span className="consistency-track"><i className={day === 'Fri' ? 'highlight-bar' : ''} style={{ height: `${value}%` }} /></span><span className="consistency-label">{day}</span></div>)}</div></section><section className="panel reflection-panel" aria-roledescription="carousel" aria-label="Pattern spotlight">
+      <div className="panel-heading"><div><h2>Keep what fits</h2></div><span className="reflection-icon"><Sparkles size={17} /></span></div>
+      {current && <div className="spotlight" key={current.id} aria-live="polite">
+        <span className="spotlight-kind" data-kind={current.kind}>{insightKinds[current.kind].label}{current.sample && ' · sample'}</span>
+        <p className="spotlight-title">{current.title}</p>
+        <p className="spotlight-body">{current.body}</p>
+        {current.action && <button className="text-button" onClick={() => act(current)}>{current.action.label} <ArrowRight size={15} /></button>}
+      </div>}
+      <div className="spotlight-nav">
+        <button className="spotlight-arrow" aria-label="Previous pattern" onClick={() => setSpotlight((value) => (value - 1 + insights.length) % insights.length)}><ChevronLeft size={16} /></button>
+        <span className="spotlight-count">{(spotlight % Math.max(insights.length, 1)) + 1} of {insights.length}</span>
+        <button className="spotlight-arrow" aria-label="Next pattern" onClick={() => setSpotlight((value) => (value + 1) % insights.length)}><ChevronRight size={16} /></button>
+        <button className="spotlight-all" onClick={showAll}>See all patterns</button>
+      </div>
+    </section></div>
+
+    <section className="panel patterns-panel" id="patterns">
+      <div className="patterns-heading">
+        <div><h2>What your patterns say</h2><p>Read from your plan{Object.keys(records).length >= 3 ? ' and your history' : ''}. Nothing here is a grade.</p></div>
+        <div className="pattern-filters" role="tablist" aria-label="Filter patterns">
+          {(['all', 'working', 'improve', 'idea'] as const).map((kind) => {
+            const total = kind === 'all' ? insights.length : insights.filter((item) => item.kind === kind).length
+            return <button key={kind} role="tab" aria-selected={filter === kind} data-kind={kind} className={`pattern-filter ${filter === kind ? 'selected' : ''}`} onClick={() => { setFilter(kind); setExpanded(false) }}>{kind === 'all' ? 'All' : insightKinds[kind].label}<span>{total}</span></button>
+          })}
+        </div>
+      </div>
+      <ul className="pattern-list">{visible.map((insight) => {
+        const meta = insightKinds[insight.kind]
+        const Icon = meta.icon
+        return <li className="pattern-row" data-tone={meta.tone} key={insight.id}>
+          <span className="pattern-icon"><Icon size={17} /></span>
+          <div className="pattern-copy">
+            <div className="pattern-title-row"><strong>{insight.title}</strong>{insight.sample && <span className="sample-pill">SAMPLE</span>}</div>
+            <p>{insight.body}</p>
+            {insight.stat && <span className="pattern-stat">{insight.stat}</span>}
+          </div>
+          {insight.action && <button className="button button-quiet pattern-action" onClick={() => act(insight)}>{insight.action.label}<ArrowRight size={14} /></button>}
+        </li>
+      })}</ul>
+      {filtered.length > 4 && <button className="pattern-more" onClick={() => setExpanded((value) => !value)}>{expanded ? 'Show fewer' : `Show ${filtered.length - 4} more`}<ChevronDown size={15} className={expanded ? 'is-flipped' : ''} /></button>}
+    </section>
+    <div className="insight-bottom-note"><Heart size={16} /><span>No streaks to protect here. Missing a day is information, not a setback.</span></div></>
 }
 
 function ProfileView({ name, workspace, onSave }: { name: string; workspace: Workspace; onSave: (name: string) => void }) {
@@ -713,8 +912,119 @@ function PageIntro({ eyebrow, title, subtitle, action, tone }: { eyebrow: string
   return <section className="page-intro" data-tone={tone}><div className="page-intro-copy"><div className="eyebrow">{eyebrow}</div><h1 className="banner-title">{title}</h1><p>{subtitle}</p>{action && <div className="page-intro-action">{action}</div>}</div></section>
 }
 
-function ItemModal({ kind, onClose, onSave }: { kind: 'habit' | 'routine'; onClose: () => void; onSave: (event: React.FormEvent<HTMLFormElement>) => void }) {
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" data-tone={kind === 'routine' ? 'sage' : 'orange'}><div className="modal-top"><span className="modal-icon">{kind === 'routine' ? <Repeat size={19} /> : <ListChecks size={19} />}</span><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={19} /></button></div><div className="eyebrow small-eyebrow">MAKE IT YOURS</div><h2 id="modal-title">{kind === 'routine' ? 'A new rhythm' : 'A small thing, for you'}</h2><p>{kind === 'routine' ? 'Start with what feels doable. You can shape it as you go.' : 'No perfect plan needed. Just a place to begin.'}</p><form onSubmit={onSave}><label className="form-label">{kind === 'routine' ? 'Routine name' : 'Habit name'}<input autoFocus name="name" required maxLength={54} placeholder={kind === 'routine' ? 'A slower start' : 'Step outside for a minute'} /></label><div className="form-row"><label className="form-label">{kind === 'routine' ? 'Approximate time' : 'Category'}{kind === 'routine' ? <select name="time" defaultValue="8:00 AM"><option>7:00 AM</option><option>8:00 AM</option><option>9:00 AM</option><option>6:00 PM</option><option>9:00 PM</option></select> : <select name="category" defaultValue="Lifestyle">{categories.slice(1).map((item) => <option key={item}>{item}</option>)}</select>}</label><label className="form-label">{kind === 'routine' ? 'Estimated minutes' : 'Minutes'}<input name="duration" type="number" min="1" max="240" defaultValue={kind === 'routine' ? '20' : '10'} /></label></div><div className="modal-actions"><button type="button" className="button button-quiet" onClick={onClose}>Cancel</button><button type="submit" className="button button-primary"><Plus size={16} /> Create {kind}</button></div></form></section></div>
+/* ---------- Shared editor pieces ---------- */
+function IconPicker({ value, auto, onChange }: { value?: string; auto: LucideIcon; onChange: (key: string | undefined) => void }) {
+  const Auto = auto
+  return <div className="icon-picker" role="radiogroup" aria-label="Icon">
+    <button type="button" role="radio" aria-checked={!value} className={`icon-option auto-option ${!value ? 'selected' : ''}`} onClick={() => onChange(undefined)} title="Automatic: picked from the name"><Auto size={18} /><span>Auto</span></button>
+    {Object.entries(iconLibrary).map(([key, Icon]) => <button type="button" role="radio" key={key} aria-checked={value === key} aria-label={key} title={key} className={`icon-option ${value === key ? 'selected' : ''}`} onClick={() => onChange(key)}><Icon size={18} /></button>)}
+  </div>
+}
+
+function EditorFooter({ isNew, canSave, saveLabel, itemName, deleteDetail, onCancel, onDelete }: { isNew: boolean; canSave: boolean; saveLabel: string; itemName: string; deleteDetail: string; onCancel: () => void; onDelete: () => void }) {
+  const [confirming, setConfirming] = useState(false)
+  if (confirming) return <footer className="modal-actions editor-actions is-confirming" role="alert">
+    <span className="confirm-copy"><strong>Delete “{itemName}”?</strong>{deleteDetail}</span>
+    <div className="confirm-buttons">
+      <button type="button" className="button button-quiet" onClick={() => setConfirming(false)} autoFocus>Keep it</button>
+      <button type="button" className="button button-danger" onClick={onDelete}><Trash2 size={14} /> Delete</button>
+    </div>
+  </footer>
+  return <footer className="modal-actions editor-actions">
+    {!isNew && <button type="button" className="delete-link" onClick={() => setConfirming(true)}><Trash2 size={14} /> Delete</button>}
+    <button type="button" className="button button-quiet" onClick={onCancel}>Cancel</button>
+    <button type="submit" className="button button-primary" disabled={!canSave}><Check size={15} /> {saveLabel}</button>
+  </footer>
+}
+
+function useEscape(onClose: () => void) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+}
+
+/* ---------- Habit editor ---------- */
+const habitFrequencies = ['Every day', 'Weekdays', 'A few times a week', 'Once a week', 'Whenever it fits']
+
+function HabitEditor({ habit, routines, onClose, onSave, onDelete }: { habit?: Habit; routines: Routine[]; onClose: () => void; onSave: (habit: Habit, routineId: string) => void; onDelete: (id: string) => void }) {
+  const isNew = !habit
+  const [name, setName] = useState(habit?.name ?? '')
+  const [icon, setIcon] = useState(habit?.icon)
+  const [category, setCategory] = useState(habit?.category ?? 'Lifestyle')
+  const [duration, setDuration] = useState(String(habit?.duration ?? 10))
+  const [time, setTime] = useState(habit && timeInMinutes(habit.time) >= 0 ? to24(habit.time) : '09:00')
+  const [frequency, setFrequency] = useState(habit?.frequency ?? 'A few times a week')
+  const [routineId, setRoutineId] = useState(routines.find((routine) => habit && routine.habitIds.includes(habit.id))?.id ?? '')
+  const [tinyVersion, setTinyVersion] = useState(habit?.tinyVersion ?? '')
+  const [notes, setNotes] = useState(habit?.notes ?? '')
+  useEscape(onClose)
+
+  const PreviewIcon = (icon && iconLibrary[icon]) || autoHabitIcon(name, category)
+  const canSave = name.trim().length > 0
+  const minutes = Math.max(1, Math.round(Number(duration) || 1))
+  const routineName = routines.find((routine) => routine.id === routineId)?.name
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!canSave) return
+    onSave({
+      ...(habit ?? { id: `habit-${Date.now()}`, routine: 'Just for me' }),
+      name: name.trim(), icon, category, duration: minutes, time: from24(time), frequency,
+      tinyVersion: tinyVersion.trim() || undefined, notes: notes.trim() || undefined,
+    }, routineId)
+  }
+
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+    <section className="modal editor" role="dialog" aria-modal="true" aria-labelledby="habit-editor-title" data-tone={toneFor(category)}>
+      <form onSubmit={submit} className="editor-form">
+        <header className="editor-header">
+          <div className="modal-top">
+            <span className="modal-icon"><PreviewIcon size={19} /></span>
+            <button type="button" className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={19} /></button>
+          </div>
+          <div className="eyebrow small-eyebrow">{isNew ? 'A SMALL THING, FOR YOU' : 'EDIT HABIT'}</div>
+          <h2 id="habit-editor-title">{name.trim() || 'Untitled habit'}</h2>
+          <p className="editor-summary" aria-live="polite">{[frequency, from24(time), formatDuration(minutes), routineName ? `in ${routineName}` : 'on its own'].join(' · ')}</p>
+        </header>
+
+        <div className="editor-body">
+          <fieldset className="editor-section">
+            <legend>The basics</legend>
+            <label className="form-label">Habit name<input autoFocus={isNew} value={name} onChange={(event) => setName(event.target.value)} required maxLength={54} placeholder="Step outside for a minute" /></label>
+            <div className="form-label"><span>Icon</span><IconPicker value={icon} auto={autoHabitIcon(name, category)} onChange={setIcon} /></div>
+            <div className="form-label"><span>Category</span>
+              <div className="suggestion-chips" role="radiogroup" aria-label="Category">{categories.slice(1).map((item) => <button type="button" role="radio" aria-checked={category === item} key={item} data-tone={toneFor(item)} className={`suggestion-chip tone-chip ${category === item ? 'selected' : ''}`} onClick={() => setCategory(item)}><span className="tone-dot" />{item}</button>)}</div>
+            </div>
+          </fieldset>
+
+          <fieldset className="editor-section">
+            <legend>When</legend>
+            <label className="form-label">How often<select value={frequency} onChange={(event) => setFrequency(event.target.value)}>{habitFrequencies.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <div className="form-row">
+              <label className="form-label">Usual time<input type="time" value={time} onChange={(event) => setTime(event.target.value)} required /></label>
+              <label className="form-label">Minutes<input type="number" min="1" max="240" value={duration} onChange={(event) => setDuration(event.target.value)} /></label>
+            </div>
+            <label className="form-label">Part of a routine<select value={routineId} onChange={(event) => setRoutineId(event.target.value)}><option value="">Not in a routine</option>{routines.map((routine) => <option key={routine.id} value={routine.id}>{routine.name}</option>)}</select></label>
+          </fieldset>
+
+          <fieldset className="editor-section minimum-section">
+            <legend><Feather size={15} /> Tiny version</legend>
+            <p className="section-help">The two-minute version for low days. Doing just this still counts.</p>
+            <label className="form-label"><span className="visually-hidden">Tiny version</span><input value={tinyVersion} onChange={(event) => setTinyVersion(event.target.value)} maxLength={60} placeholder="Just put on my shoes" /></label>
+          </fieldset>
+
+          <fieldset className="editor-section">
+            <legend>Notes</legend>
+            <label className="form-label"><span className="visually-hidden">Notes</span><textarea value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} maxLength={280} placeholder="Why this matters to you, or what helps it go well" /></label>
+          </fieldset>
+        </div>
+
+        <EditorFooter isNew={isNew} canSave={canSave} saveLabel={isNew ? 'Create habit' : 'Save changes'} itemName={habit?.name ?? ''} deleteDetail="Its history goes with it. Routines that use it keep going without it." onCancel={onClose} onDelete={() => habit && onDelete(habit.id)} />
+      </form>
+    </section>
+  </div>
 }
 
 function timeInMinutes(time: string) {
